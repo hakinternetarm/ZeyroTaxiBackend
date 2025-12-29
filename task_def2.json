@@ -1,0 +1,33 @@
+{
+  "family": "my-public-api-task",
+  "executionRoleArn": "arn:aws:iam::040246227954:role/ecsTaskExecutionRole",
+  "networkMode": "awsvpc",
+  "containerDefinitions": [
+    {
+      "name": "my-public-api",
+      "image": "040246227954.dkr.ecr.us-east-1.amazonaws.com/my-public-api:latest",
+      "cpu": 0,
+      "memory": 512,
+      "portMappings": [
+        {
+          "containerPort": 5000,
+          "hostPort": 5000,
+          "protocol": "tcp"
+        }
+      ],
+      "essential": true,
+	  "command": ["dotnet", "TaxiApi.dll", "--urls", "http://0.0.0.0:5000"],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/my-public-api-task",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ],
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512"
+}
