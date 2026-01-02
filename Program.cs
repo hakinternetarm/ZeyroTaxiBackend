@@ -52,10 +52,13 @@ builder.Services
     });
 
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new OpenApiInfo { Title = "Taxi API", Version = "v1" });
+    c.DocumentFilter<ServersDocumentFilter>();
+});
 
 var app = builder.Build();
-
 
 // REQUIRED FOR ALB / REVERSE PROXY
 app.UseForwardedHeaders(new ForwardedHeadersOptions
