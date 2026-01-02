@@ -5,7 +5,7 @@ namespace Taxi_API.Services
 {
     public class ServersDocumentFilter : IDocumentFilter
     {
-        private readonly string _prodHost = "https://zeyro.space";
+        private readonly string _prodHost = "http://zeyro.space";
         private readonly string _localHost = "http://localhost:5000";
 
         public void Apply(OpenApiDocument swaggerDoc, DocumentFilterContext context)
