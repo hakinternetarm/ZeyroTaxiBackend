@@ -25,7 +25,6 @@ builder.Services.AddScoped<IStorageService, LocalStorageService>();
 builder.Services.AddScoped<IEmailService, SmtpEmailService>();
 builder.Services.AddScoped<ITokenService, JwtTokenService>();
 builder.Services.AddSingleton<IImageComparisonService, OpenCvImageComparisonService>();
-
 // Register OpenAI service for voice/chat
 builder.Services.AddSingleton<IOpenAiService, OpenAiService>();
 
@@ -52,15 +51,11 @@ builder.Services
     });
 
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen(c =>
-{
-    c.SwaggerDoc("v1", new OpenApiInfo { Title = "Taxi API", Version = "v1" });
-    c.DocumentFilter<ServersDocumentFilter>();
-});
+builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
-// REQUIRED FOR ALB / REVERSE PROXY
+// REQUIRED for ALB / reverse proxy
 app.UseForwardedHeaders(new ForwardedHeadersOptions
 {
     ForwardedHeaders =
@@ -69,7 +64,7 @@ app.UseForwardedHeaders(new ForwardedHeadersOptions
         ForwardedHeaders.XForwardedHost
 });
 
-// IMPORTANT: do NOT force HTTPS inside container unless ALB listener is HTTPS
+// DO NOT force HTTPS inside container unless ALB listener is HTTPS
 // app.UseHttpsRedirection();
 
 if (app.Environment.IsDevelopment())
@@ -77,11 +72,11 @@ if (app.Environment.IsDevelopment())
     app.UseDeveloperExceptionPage();
 }
 
-// Swagger (use relative paths)
+// Swagger — RELATIVE PATHS ONLY (no localhost)
 app.UseSwagger();
+
 app.UseSwaggerUI(c =>
 {
-    // Use relative JSON endpoint so the UI works regardless of host/port
     c.SwaggerEndpoint("/swagger/v1/swagger.json", "Taxi API V1");
     c.RoutePrefix = "swagger";
 });
