@@ -19,6 +19,8 @@ Run locally:
 
 The API binds to port 5000 inside the container / process. Open the Swagger UI at:
 - http://localhost:5000/swagger
+- http://my-public-api-alb-1517396588.us-east-1.elb.amazonaws.com/swagger
+- http://zeyro.space/swagger
 
 Configuration
 -------------
@@ -79,7 +81,3 @@ Notes and next steps
 - Driver assignment and notifications are simulated; replace with a real matching algorithm and notification (push, SMS, websocket) later.
 - Consider using a routing/directions API (Mapbox, Google Directions, OSRM) for accurate distance/ETA and fare calculation.
 - Secure secrets (Jwt:Key, OpenAI key) via environment variables or secret store in production.
-
-Contact
--------
-This README was generated/updated by GitHub Copilot automation. For development questions, run or inspect the controllers under `Controllers/`.
