@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Linq;
 using Taxi_API.Data;
 using Taxi_API.Models;
+using Taxi_API.DTOs;
 
 namespace Taxi_API.Controllers
 {
@@ -230,12 +231,21 @@ namespace Taxi_API.Controllers
 
         [Authorize]
         [HttpPost("rate/{id}")]
-        public async Task<IActionResult> Rate(Guid id, [FromBody] Order rating)
+        public async Task<IActionResult> Rate(Guid id, [FromBody] RatingRequest req)
         {
-            var order = await _db.Orders.FirstOrDefaultAsync(o => o.Id == id);
+            var order = await _db.Orders.Include(o => o.User).FirstOrDefaultAsync(o => o.Id == id);
             if (order == null) return NotFound();
-            order.Rating = rating.Rating;
-            order.Review = rating.Review;
+
+            // Ensure only the rider who created the order can rate
+            var userIdStr = User.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)?.Value;
+            if (!Guid.TryParse(userIdStr, out var userId)) return Unauthorized();
+            if (order.UserId != userId) return Forbid();
+
+            // Only allow rating after completion
+            if (order.Status != "completed") return BadRequest("Can rate only completed orders");
+
+            order.Rating = req.Rating;
+            order.Review = req.Review;
             await _db.SaveChangesAsync();
             return Ok(order);
         }
