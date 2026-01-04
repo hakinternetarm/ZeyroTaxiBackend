@@ -22,6 +22,9 @@ namespace Taxi_API.Models
         public double? DestLat { get; set; }
         public double? DestLng { get; set; }
 
+        // Store multiple stops as JSON (array of objects with address/lat/lng)
+        public string? StopsJson { get; set; }
+
         // For delivery or scheduled orders
         public string? PackageDetails { get; set; }
         public DateTime? ScheduledFor { get; set; }
@@ -48,6 +51,11 @@ namespace Taxi_API.Models
 
         // Payment
         public string? PaymentMethod { get; set; }
+
+        // Additional options
+        public bool PetAllowed { get; set; }
+        public bool ChildSeat { get; set; }
+        public string? Tariff { get; set; }
 
         // Rating
         public int? Rating { get; set; }

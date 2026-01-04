@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Text.Json;
+using System.Linq;
 using Taxi_API.Data;
 using Taxi_API.Models;
 
@@ -31,18 +33,20 @@ namespace Taxi_API.Controllers
             return R * c;
         }
 
-        private decimal CalculatePrice(double distanceKm, int etaMinutes, double pickupLat, double pickupLng, double destLat, double destLng)
+        private decimal CalculatePrice(double distanceKm, int etaMinutes, double pickupLat, double pickupLng, double destLat, double destLng, string? tariff, bool pet, bool child)
         {
-            // Simple pricing model: base fare + per km + per minute
-            decimal baseFare = 400m; // base in local currency
-            decimal perKm = 60m; // per km rate
-            decimal perMinute = 20m; // per minute rate
+            // Pricing per tariff
+            decimal baseFare = tariff == "premium" ? 800m : 400m;
+            decimal perKm = tariff == "premium" ? 100m : 60m;
+            decimal perMinute = tariff == "premium" ? 30m : 20m;
 
             var price = baseFare + (decimal)distanceKm * perKm + (decimal)etaMinutes * perMinute;
 
-            // Example zone surcharge: if pickup or destination within city center box apply 10% surcharge
-            // (Replace boxes with real coordinates as needed)
-            // City center box sample (lat/lng roughly)
+            // Pet/child surcharge
+            if (pet) price += 100m;
+            if (child) price += 50m;
+
+            // Example city zone surcharge
             var cityCenterMinLat = 40.15; var cityCenterMaxLat = 40.25;
             var cityCenterMinLng = 44.45; var cityCenterMaxLng = 44.60;
 
@@ -54,9 +58,67 @@ namespace Taxi_API.Controllers
                 price *= 1.10m; // 10% surcharge
             }
 
-            // Minimum fare enforcement
             if (price < 800m) price = 800m;
             return Math.Round(price, 0);
+        }
+
+        public record AcceptOrderRequest(double FromLat, double FromLng, Stop[]? Stops, string PaymentMethod, bool Pet, bool Child, string Tariff);
+        public record Stop(string Address, double Lat, double Lng);
+
+        [Authorize]
+        [HttpPost("accept/{id}")]
+        public async Task<IActionResult> AcceptOrder(Guid id, [FromBody] AcceptOrderRequest req)
+        {
+            var order = await _db.Orders.FirstOrDefaultAsync(o => o.Id == id);
+            if (order == null) return NotFound();
+
+            // set pickup coords
+            order.PickupLat = req.FromLat;
+            order.PickupLng = req.FromLng;
+
+            // set stops array as JSON if provided
+            if (req.Stops != null && req.Stops.Length > 0)
+            {
+                order.StopsJson = JsonSerializer.Serialize(req.Stops);
+                // set destination as last stop
+                var last = req.Stops.Last();
+                order.DestLat = last.Lat;
+                order.DestLng = last.Lng;
+                order.Destination = last.Address;
+            }
+
+            order.PaymentMethod = req.PaymentMethod;
+            order.PetAllowed = req.Pet;
+            order.ChildSeat = req.Child;
+            order.Tariff = req.Tariff;
+
+            // compute distance/eta/price now
+            if (order.PickupLat.HasValue && order.DestLat.HasValue && order.PickupLng.HasValue && order.DestLng.HasValue)
+            {
+                var distance = HaversineDistanceKm(order.PickupLat.Value, order.PickupLng.Value, order.DestLat.Value, order.DestLng.Value);
+                var eta = (int)Math.Ceiling(distance / 0.5);
+                var price = CalculatePrice(distance, eta, order.PickupLat.Value, order.PickupLng.Value, order.DestLat.Value, order.DestLng.Value, req.Tariff, req.Pet, req.Child);
+
+                order.DistanceKm = Math.Round(distance, 2);
+                order.EtaMinutes = eta;
+                order.Price = price;
+            }
+
+            // Assign driver simulation
+            var driver = await _db.Users.FirstOrDefaultAsync(u => u.IsDriver && u.DriverProfile != null);
+            if (driver != null)
+            {
+                order.DriverId = driver.Id;
+                order.DriverName = driver.Name;
+                order.DriverPhone = driver.Phone;
+                order.DriverCar = "Toyota";
+                order.DriverPlate = "510ZR10";
+                order.Status = "assigned";
+                await _db.SaveChangesAsync();
+            }
+
+            await _db.SaveChangesAsync();
+            return Ok(order);
         }
 
         [Authorize]
@@ -74,7 +136,7 @@ namespace Taxi_API.Controllers
             // ETA estimate based on average speed 30 km/h -> 0.5 km/min
             var eta = (int)Math.Ceiling(distance / 0.5);
 
-            var price = CalculatePrice(distance, eta, order.PickupLat.Value, order.PickupLng.Value, order.DestLat.Value, order.DestLng.Value);
+            var price = CalculatePrice(distance, eta, order.PickupLat.Value, order.PickupLng.Value, order.DestLat.Value, order.DestLng.Value, order.Tariff, order.PetAllowed, order.ChildSeat);
 
             return Ok(new { distanceKm = Math.Round(distance, 2), price = price, etaMinutes = eta });
         }
@@ -101,7 +163,7 @@ namespace Taxi_API.Controllers
             // Compute distance, eta and price
             var distance = HaversineDistanceKm(order.PickupLat.Value, order.PickupLng.Value, order.DestLat.Value, order.DestLng.Value);
             var eta = (int)Math.Ceiling(distance / 0.5);
-            var price = CalculatePrice(distance, eta, order.PickupLat.Value, order.PickupLng.Value, order.DestLat.Value, order.DestLng.Value);
+            var price = CalculatePrice(distance, eta, order.PickupLat.Value, order.PickupLng.Value, order.DestLat.Value, order.DestLng.Value, order.Tariff, order.PetAllowed, order.ChildSeat);
 
             order.DistanceKm = Math.Round(distance, 2);
             order.EtaMinutes = eta;
