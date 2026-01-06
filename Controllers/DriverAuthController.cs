@@ -42,26 +42,75 @@ namespace Taxi_API.Controllers
             _db.AuthSessions.Add(session);
             await _db.SaveChangesAsync();
 
-            await _email.SendAsync(req.Phone + "@example.com", "Your driver login code", $"Your code is: {code}");
+            await _email.SendAsync(req.Phone + "@example.com", "Your driver verification code", $"Your code is: {code}");
 
-            // Optionally store name temporarily by creating/updating user record with IsDriver = false until verification
-            if (!string.IsNullOrWhiteSpace(req.Name))
+            // Do not create/register user here. Client must verify first.
+            return Ok(new { Sent = true });
+        }
+
+        [HttpPost("resend")]
+        public async Task<IActionResult> Resend([FromBody] ResendRequest req)
+        {
+            AuthSession? session = null;
+            if (!string.IsNullOrWhiteSpace(req.AuthSessionId) && Guid.TryParse(req.AuthSessionId, out var sid))
             {
-                var existing = await _db.Users.FirstOrDefaultAsync(u => u.Phone == req.Phone);
-                if (existing == null)
-                {
-                    var user = new User { Id = Guid.NewGuid(), Phone = req.Phone, Name = req.Name, IsDriver = false };
-                    _db.Users.Add(user);
-                    await _db.SaveChangesAsync();
-                }
-                else
-                {
-                    existing.Name = req.Name;
-                    await _db.SaveChangesAsync();
-                }
+                session = await _db.AuthSessions.FirstOrDefaultAsync(s => s.Id == sid);
             }
 
-            return Ok(new { AuthSessionId = session.Id.ToString(), ExpiresAt = session.ExpiresAt });
+            if (session == null && !string.IsNullOrWhiteSpace(req.Phone))
+            {
+                var code = new Random().Next(100000, 999999).ToString();
+                session = new AuthSession
+                {
+                    Id = Guid.NewGuid(),
+                    Phone = req.Phone!,
+                    Code = code,
+                    Verified = false,
+                    CreatedAt = DateTime.UtcNow,
+                    ExpiresAt = DateTime.UtcNow.AddMinutes(10)
+                };
+                _db.AuthSessions.Add(session);
+                await _db.SaveChangesAsync();
+            }
+
+            if (session == null) return BadRequest("No session or phone provided");
+
+            session.Code = new Random().Next(100000, 999999).ToString();
+            session.ExpiresAt = DateTime.UtcNow.AddMinutes(10);
+            await _db.SaveChangesAsync();
+            await _email.SendAsync(session.Phone + "@example.com", "Your driver verification code (resend)", $"Your code is: {session.Code}");
+
+            return Ok(new { Sent = true });
+        }
+
+        [HttpPost("verify")]
+        public async Task<IActionResult> Verify([FromBody] VerifyRequest req)
+        {
+            if (string.IsNullOrWhiteSpace(req.Phone) || string.IsNullOrWhiteSpace(req.Code)) return BadRequest("Phone and Code are required");
+
+            var session = await _db.AuthSessions.OrderByDescending(s => s.CreatedAt).FirstOrDefaultAsync(s => s.Phone == req.Phone && s.Code == req.Code && s.ExpiresAt > DateTime.UtcNow);
+            if (session == null) return BadRequest("Invalid or expired code");
+
+            session.Verified = true;
+            await _db.SaveChangesAsync();
+
+            // create or fetch user and mark as driver
+            var user = await _db.Users.FirstOrDefaultAsync(u => u.Phone == req.Phone);
+            if (user == null)
+            {
+                user = new User { Id = Guid.NewGuid(), Phone = req.Phone, Name = req.Name, IsDriver = true, PhoneVerified = true };
+                _db.Users.Add(user);
+                await _db.SaveChangesAsync();
+            }
+            else
+            {
+                user.IsDriver = true;
+                user.PhoneVerified = true;
+                if (!string.IsNullOrWhiteSpace(req.Name)) user.Name = req.Name;
+                await _db.SaveChangesAsync();
+            }
+
+            return Ok(new { AuthSessionId = session.Id.ToString() });
         }
 
         [HttpPost("auth")]
@@ -79,74 +128,21 @@ namespace Taxi_API.Controllers
 
             if (session.Code != req.Code) return BadRequest("Invalid code");
 
-            // mark verified
-            session.Verified = true;
-            await _db.SaveChangesAsync();
+            // require verification step completed first
+            if (!session.Verified) return BadRequest("Session not verified");
 
             var phone = session.Phone;
-            var user = await _db.Users.FirstOrDefaultAsync(u => u.Phone == phone);
+            var user = await _db.Users.FirstOrDefaultAsync(u => u.Phone == phone && u.IsDriver);
+            if (user == null) return BadRequest("Driver not registered or verified");
 
-            if (user != null && user.IsDriver)
-            {
-                // existing driver -> login
-                var token = _tokenService.GenerateToken(user);
-                return Ok(new AuthResponse(token, session.Id.ToString()));
-            }
-
-            // not an existing driver -> register as driver but do NOT auto-login (client will call login afterwards)
-            if (user == null)
-            {
-                user = new User { Id = Guid.NewGuid(), Phone = phone, Name = req.Name, IsDriver = true, PhoneVerified = true };
-                _db.Users.Add(user);
-                await _db.SaveChangesAsync();
-                return Ok(new DriverAuthResponse(null, session.Id.ToString(), true));
-            }
-
-            // user exists but not driver
-            user.IsDriver = true;
-            user.PhoneVerified = true;
-            if (!string.IsNullOrWhiteSpace(req.Name)) user.Name = req.Name;
-            await _db.SaveChangesAsync();
-
-            // return registered marker without token (driver should login explicitly)
-            return Ok(new DriverAuthResponse(null, session.Id.ToString(), true));
-        }
-
-        [HttpPost("verify")]
-        public async Task<IActionResult> VerifyDriver([FromBody] AuthRequest req)
-        {
-            if (string.IsNullOrWhiteSpace(req.AuthSessionId) || string.IsNullOrWhiteSpace(req.Code))
-                return BadRequest("AuthSessionId and Code are required");
-
-            if (!Guid.TryParse(req.AuthSessionId, out var sessionId)) return BadRequest("Invalid AuthSessionId");
-
-            var session = await _db.AuthSessions.FirstOrDefaultAsync(s => s.Id == sessionId);
-            if (session == null) return BadRequest("Invalid session");
-
-            if (session.ExpiresAt < DateTime.UtcNow) return BadRequest("Code expired");
-
-            if (session.Code != req.Code) return BadRequest("Invalid code");
-
-            // mark verified
-            session.Verified = true;
-            await _db.SaveChangesAsync();
-
-            var phone = session.Phone;
-            var user = await _db.Users.FirstOrDefaultAsync(u => u.Phone == phone);
-            if (user == null) return NotFound("User not found");
-
-            user.PhoneVerified = true;
-            await _db.SaveChangesAsync();
-
-            return Ok(new { Verified = true, Phone = user.Phone });
+            var token = _tokenService.GenerateToken(user);
+            return Ok(new AuthResponse(token, session.Id.ToString()));
         }
 
         [Authorize]
         [HttpPost("login")]
         public async Task<IActionResult> Login([FromBody] object? body)
         {
-            // Token-based login: clients should use /api/auth/auth flow. For drivers, after registration they can request code and authenticate to get token.
-            // This endpoint simply returns the token for the authenticated driver (token already provided) — not typical. Keep for compatibility.
             var userIdStr = User.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)?.Value;
             if (!Guid.TryParse(userIdStr, out var userId)) return Unauthorized();
             var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId && u.IsDriver);
@@ -159,7 +155,6 @@ namespace Taxi_API.Controllers
         [HttpPost("logout")]
         public IActionResult Logout()
         {
-            // JWTs are stateless. For logout, client should delete token. Optionally implement token revocation.
             return Ok(new { LoggedOut = true });
         }
     }

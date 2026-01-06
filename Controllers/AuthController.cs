@@ -44,24 +44,8 @@ namespace Taxi_API.Controllers
             // send code via email/sms. For simplicity use email service with phone@example.com
             await _email.SendAsync(req.Phone + "@example.com", "Your login code", $"Your code is: {code}");
 
-            // If name provided, pre-create user record with name (not verified yet)
-            if (!string.IsNullOrWhiteSpace(req.Name))
-            {
-                var existing = await _db.Users.FirstOrDefaultAsync(u => u.Phone == req.Phone);
-                if (existing == null)
-                {
-                    var user = new User { Id = Guid.NewGuid(), Phone = req.Phone, Name = req.Name };
-                    _db.Users.Add(user);
-                    await _db.SaveChangesAsync();
-                }
-                else
-                {
-                    existing.Name = req.Name;
-                    await _db.SaveChangesAsync();
-                }
-            }
-
-            return Ok(new { AuthSessionId = session.Id.ToString(), ExpiresAt = session.ExpiresAt });
+            // Don't return AuthSessionId here to avoid misuse; client will call Verify with phone+code
+            return Ok(new { Sent = true });
         }
 
         [HttpPost("resend")]
@@ -98,10 +82,34 @@ namespace Taxi_API.Controllers
             await _db.SaveChangesAsync();
             await _email.SendAsync(session.Phone + "@example.com", "Your login code (resend)", $"Your code is: {session.Code}");
 
-            return Ok(new { AuthSessionId = session.Id.ToString(), ExpiresAt = session.ExpiresAt });
+            return Ok(new { Sent = true });
         }
 
-        [HttpPost("auth")]
+        [HttpPost("verify")]
+        public async Task<IActionResult> Verify([FromBody] VerifyRequest req)
+        {
+            if (string.IsNullOrWhiteSpace(req.Phone) || string.IsNullOrWhiteSpace(req.Code)) return BadRequest("Phone and Code are required");
+
+            var session = await _db.AuthSessions.OrderByDescending(s => s.CreatedAt).FirstOrDefaultAsync(s => s.Phone == req.Phone && s.Code == req.Code && s.ExpiresAt > DateTime.UtcNow);
+            if (session == null) return BadRequest("Invalid or expired code");
+
+            session.Verified = true;
+            await _db.SaveChangesAsync();
+
+            // create or fetch user
+            var user = await _db.Users.FirstOrDefaultAsync(u => u.Phone == req.Phone);
+            if (user == null)
+            {
+                user = new User { Id = Guid.NewGuid(), Phone = req.Phone, Name = req.Name };
+                _db.Users.Add(user);
+                await _db.SaveChangesAsync();
+            }
+
+            // Now return AuthSessionId so client can use it if needed
+            return Ok(new { AuthSessionId = session.Id.ToString() });
+        }
+
+        [HttpPost("auth")] // combined login/register using session id + code
         public async Task<IActionResult> Auth([FromBody] AuthRequest req)
         {
             if (string.IsNullOrWhiteSpace(req.AuthSessionId) || string.IsNullOrWhiteSpace(req.Code))
@@ -116,9 +124,8 @@ namespace Taxi_API.Controllers
 
             if (session.Code != req.Code) return BadRequest("Invalid code");
 
-            // mark verified
-            session.Verified = true;
-            await _db.SaveChangesAsync();
+            // require that session is verified
+            if (!session.Verified) return BadRequest("Session not verified");
 
             var phone = session.Phone;
             var user = await _db.Users.FirstOrDefaultAsync(u => u.Phone == phone);
@@ -131,15 +138,6 @@ namespace Taxi_API.Controllers
 
             var token = _tokenService.GenerateToken(user);
             return Ok(new AuthResponse(token, session.Id.ToString()));
-        }
-
-        [HttpGet("session/{id}")]
-        public async Task<IActionResult> GetSession(string id)
-        {
-            if (!Guid.TryParse(id, out var sid)) return BadRequest("Invalid id");
-            var session = await _db.AuthSessions.FirstOrDefaultAsync(s => s.Id == sid);
-            if (session == null) return NotFound();
-            return Ok(new { session.Id, session.Phone, session.Verified, session.ExpiresAt });
         }
     }
 }
