@@ -12,6 +12,8 @@ namespace Taxi_API.Data
         public DbSet<Photo> Photos => Set<Photo>();
         public DbSet<AuthSession> AuthSessions => Set<AuthSession>();
         public DbSet<Order> Orders => Set<Order>();
+        public DbSet<ScheduledPlan> ScheduledPlans => Set<ScheduledPlan>();
+        public DbSet<ScheduledPlanExecution> ScheduledPlanExecutions => Set<ScheduledPlanExecution>();
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -46,6 +48,24 @@ namespace Taxi_API.Data
                 .WithMany() // no navigation property on User for driven orders
                 .HasForeignKey(o => o.DriverId)
                 .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<ScheduledPlan>()
+                .HasKey(s => s.Id);
+
+            modelBuilder.Entity<ScheduledPlan>()
+                .HasOne(s => s.User)
+                .WithMany()
+                .HasForeignKey(s => s.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<ScheduledPlanExecution>()
+                .HasKey(e => e.Id);
+
+            modelBuilder.Entity<ScheduledPlanExecution>()
+                .HasOne(e => e.Plan)
+                .WithMany()
+                .HasForeignKey(e => e.PlanId)
+                .OnDelete(DeleteBehavior.Cascade);
 
             base.OnModelCreating(modelBuilder);
         }
