@@ -37,12 +37,41 @@ namespace Taxi_API.Controllers
             return R * c;
         }
 
-        private decimal CalculatePrice(double distanceKm, int etaMinutes, double pickupLat, double pickupLng, double destLat, double destLng, string? tariff, bool pet, bool child)
+        private decimal CalculatePrice(double distanceKm, int etaMinutes, double pickupLat, double pickupLng, double destLat, double destLng, string? tariff, string? vehicleType, bool pet, bool child)
         {
-            // Pricing per tariff
-            decimal baseFare = tariff == "premium" ? 800m : 400m;
-            decimal perKm = tariff == "premium" ? 100m : 60m;
-            decimal perMinute = tariff == "premium" ? 30m : 20m;
+            // Pricing based on vehicle type and tariff
+            var v = (vehicleType ?? "car").ToLower();
+
+            decimal baseFare;
+            decimal perKm;
+            decimal perMinute;
+
+            switch (v)
+            {
+                case "moto":
+                    baseFare = 200m;
+                    perKm = 30m;
+                    perMinute = 8m;
+                    break;
+                case "van":
+                    baseFare = 600m;
+                    perKm = 80m;
+                    perMinute = 25m;
+                    break;
+                default: // car
+                    baseFare = 400m;
+                    perKm = 60m;
+                    perMinute = 20m;
+                    break;
+            }
+
+            // tariff modifiers (e.g., premium)
+            if (!string.IsNullOrEmpty(tariff) && tariff.ToLower() == "premium")
+            {
+                baseFare *= 2m;
+                perKm *= 1.5m;
+                perMinute *= 1.5m;
+            }
 
             var price = baseFare + (decimal)distanceKm * perKm + (decimal)etaMinutes * perMinute;
 
@@ -62,7 +91,9 @@ namespace Taxi_API.Controllers
                 price *= 1.10m; // 10% surcharge
             }
 
-            if (price < 800m) price = 800m;
+            // Minimum price depending on vehicle
+            decimal minPrice = v == "moto" ? 300m : (v == "van" ? 1000m : 800m);
+            if (price < minPrice) price = minPrice;
             return Math.Round(price, 0);
         }
 
@@ -101,7 +132,7 @@ namespace Taxi_API.Controllers
             {
                 var distance = HaversineDistanceKm(order.PickupLat.Value, order.PickupLng.Value, order.DestLat.Value, order.DestLng.Value);
                 var eta = (int)Math.Ceiling(distance / 0.5);
-                var price = CalculatePrice(distance, eta, order.PickupLat.Value, order.PickupLng.Value, order.DestLat.Value, order.DestLng.Value, req.Tariff, req.Pet, req.Child);
+                var price = CalculatePrice(distance, eta, order.PickupLat.Value, order.PickupLng.Value, order.DestLat.Value, order.DestLng.Value, req.Tariff, order.VehicleType, req.Pet, req.Child);
 
                 order.DistanceKm = Math.Round(distance, 2);
                 order.EtaMinutes = eta;
@@ -140,9 +171,20 @@ namespace Taxi_API.Controllers
             // ETA estimate based on average speed 30 km/h -> 0.5 km/min
             var eta = (int)Math.Ceiling(distance / 0.5);
 
-            var price = CalculatePrice(distance, eta, order.PickupLat.Value, order.PickupLng.Value, order.DestLat.Value, order.DestLng.Value, order.Tariff, order.PetAllowed, order.ChildSeat);
+            var price = CalculatePrice(distance, eta, order.PickupLat.Value, order.PickupLng.Value, order.DestLat.Value, order.DestLng.Value, order.Tariff, order.VehicleType, order.PetAllowed, order.ChildSeat);
 
             return Ok(new { distanceKm = Math.Round(distance, 2), price = price, etaMinutes = eta });
+        }
+
+        // GET estimate via query parameters (supports vehicle type: moto, car, van)
+        [Authorize]
+        [HttpGet("estimate")]
+        public IActionResult EstimateGet([FromQuery] double pickupLat, [FromQuery] double pickupLng, [FromQuery] double destLat, [FromQuery] double destLng, [FromQuery] string? vehicleType, [FromQuery] string? tariff, [FromQuery] bool pet = false, [FromQuery] bool child = false)
+        {
+            var distance = HaversineDistanceKm(pickupLat, pickupLng, destLat, destLng);
+            var eta = (int)Math.Ceiling(distance / 0.5);
+            var price = CalculatePrice(distance, eta, pickupLat, pickupLng, destLat, destLng, tariff, vehicleType, pet, child);
+            return Ok(new { distanceKm = Math.Round(distance, 2), price = price, etaMinutes = eta, vehicleType = vehicleType ?? "car" });
         }
 
         [Authorize]
@@ -171,7 +213,7 @@ namespace Taxi_API.Controllers
                 // compute distance, eta and price for client convenience
                 var distance = HaversineDistanceKm(order.PickupLat.Value, order.PickupLng.Value, order.DestLat.Value, order.DestLng.Value);
                 var eta = (int)Math.Ceiling(distance / 0.5);
-                var price = CalculatePrice(distance, eta, order.PickupLat.Value, order.PickupLng.Value, order.DestLat.Value, order.DestLng.Value, order.Tariff, order.PetAllowed, order.ChildSeat);
+                var price = CalculatePrice(distance, eta, order.PickupLat.Value, order.PickupLng.Value, order.DestLat.Value, order.DestLng.Value, order.Tariff, order.VehicleType, order.PetAllowed, order.ChildSeat);
 
                 order.DistanceKm = Math.Round(distance, 2);
                 order.EtaMinutes = eta;
@@ -189,7 +231,7 @@ namespace Taxi_API.Controllers
             // Compute distance, eta and price
             var distanceNow = HaversineDistanceKm(order.PickupLat.Value, order.PickupLng.Value, order.DestLat.Value, order.DestLng.Value);
             var etaNow = (int)Math.Ceiling(distanceNow / 0.5);
-            var priceNow = CalculatePrice(distanceNow, etaNow, order.PickupLat.Value, order.PickupLng.Value, order.DestLat.Value, order.DestLng.Value, order.Tariff, order.PetAllowed, order.ChildSeat);
+            var priceNow = CalculatePrice(distanceNow, etaNow, order.PickupLat.Value, order.PickupLng.Value, order.DestLat.Value, order.DestLng.Value, order.Tariff, order.VehicleType, order.PetAllowed, order.ChildSeat);
 
             order.DistanceKm = Math.Round(distanceNow, 2);
             order.EtaMinutes = etaNow;
@@ -198,8 +240,10 @@ namespace Taxi_API.Controllers
             _db.Orders.Add(order);
             await _db.SaveChangesAsync();
 
-            // notify via socket that car finding started
-            await _socketService.NotifyOrderEventAsync(order.Id, "carFinding", new { status = "searching" });
+            // notify via socket that vehicle finding started (motoFinding/carFinding/vanFinding)
+            var vType = (order.VehicleType ?? "car").ToLower();
+            var findingEvent = $"{vType}Finding";
+            await _socketService.NotifyOrderEventAsync(order.Id, findingEvent, new { status = "searching" });
 
             // Simulate driver search: pick first available driver (IsDriver==true)
             var driver = await _db.Users.FirstOrDefaultAsync(u => u.IsDriver && u.DriverProfile != null);
@@ -216,7 +260,8 @@ namespace Taxi_API.Controllers
                 await _db.SaveChangesAsync();
 
                 // notify assigned
-                await _socketService.NotifyOrderEventAsync(order.Id, "carFound", new { driver = new { id = driver.Id, name = driver.Name, phone = driver.Phone } });
+                var foundEvent = $"{vType}Found";
+                await _socketService.NotifyOrderEventAsync(order.Id, foundEvent, new { driver = new { id = driver.Id, name = driver.Name, phone = driver.Phone } });
             }
 
             return Ok(order);

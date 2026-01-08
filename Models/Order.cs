@@ -57,6 +57,9 @@ namespace Taxi_API.Models
         public bool ChildSeat { get; set; }
         public string? Tariff { get; set; }
 
+        // Vehicle type: "moto", "car", "van"
+        public string? VehicleType { get; set; }
+
         // Rating
         public int? Rating { get; set; }
         public string? Review { get; set; }

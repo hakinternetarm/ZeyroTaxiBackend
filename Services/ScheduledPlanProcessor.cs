@@ -1,5 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Data.Sqlite;
+using System.Data.Common;
 using Taxi_API.Data;
 using Taxi_API.DTOs;
 using Taxi_API.Models;
@@ -49,7 +51,47 @@ namespace Taxi_API.Services
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-            var plans = await db.ScheduledPlans.ToListAsync(ct);
+            // Defensive: check if ScheduledPlans table exists (handles DB files created before this model was added)
+            try
+            {
+                var conn = db.Database.GetDbConnection();
+                await conn.OpenAsync(ct);
+                await using (conn)
+                {
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = "SELECT name FROM sqlite_master WHERE type='table' AND name='ScheduledPlans';";
+                    var res = await cmd.ExecuteScalarAsync(ct);
+                    if (res == null || res == DBNull.Value)
+                    {
+                        _logger.LogInformation("ScheduledPlanProcessor: ScheduledPlans table not found, skipping this run.");
+                        return;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // If we couldn't check table existence, log and skip to avoid crashing the service
+                _logger.LogWarning(ex, "ScheduledPlanProcessor: could not verify ScheduledPlans table existence, skipping this run.");
+                return;
+            }
+
+            List<ScheduledPlan> plans;
+            try
+            {
+                plans = await db.ScheduledPlans.ToListAsync(ct);
+            }
+            catch (SqliteException ex)
+            {
+                // If the ScheduledPlans table does not exist yet (race or other), skip processing silently.
+                if (ex.Message?.Contains("no such table", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    _logger.LogInformation("ScheduledPlanProcessor: ScheduledPlans table not found (caught), skipping this run.");
+                    return;
+                }
+
+                throw;
+            }
+
             foreach (var plan in plans)
             {
                 ScheduleEntry[] entries;
