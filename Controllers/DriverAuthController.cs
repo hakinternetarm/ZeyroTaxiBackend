@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Cryptography;
 using Taxi_API.Data;
 using Taxi_API.DTOs;
 using Taxi_API.Models;
@@ -51,37 +52,33 @@ namespace Taxi_API.Controllers
         [HttpPost("resend")]
         public async Task<IActionResult> Resend([FromBody] ResendRequest req)
         {
-            AuthSession? session = null;
-            if (!string.IsNullOrWhiteSpace(req.AuthSessionId) && Guid.TryParse(req.AuthSessionId, out var sid))
-            {
-                session = await _db.AuthSessions.FirstOrDefaultAsync(s => s.Id == sid);
-            }
+            if (string.IsNullOrWhiteSpace(req.Phone))
+                return BadRequest("Phone is required");
 
-            if (session == null && !string.IsNullOrWhiteSpace(req.Phone))
-            {
-                var code = new Random().Next(100000, 999999).ToString();
-                session = new AuthSession
-                {
-                    Id = Guid.NewGuid(),
-                    Phone = req.Phone!,
-                    Code = code,
-                    Verified = false,
-                    CreatedAt = DateTime.UtcNow,
-                    ExpiresAt = DateTime.UtcNow.AddMinutes(10)
-                };
-                _db.AuthSessions.Add(session);
-                await _db.SaveChangesAsync();
-            }
+            var phone = req.Phone.Trim();
 
-            if (session == null) return BadRequest("No session or phone provided");
+            var session = await _db.AuthSessions
+                .Where(s => s.Phone == phone && !s.Verified && s.ExpiresAt > DateTime.UtcNow)
+                .OrderByDescending(s => s.CreatedAt)
+                .FirstOrDefaultAsync();
 
-            session.Code = new Random().Next(100000, 999999).ToString();
+            if (session == null)
+                return BadRequest("No active session found");
+
+            session.Code = RandomNumberGenerator.GetInt32(100000, 999999).ToString();
             session.ExpiresAt = DateTime.UtcNow.AddMinutes(10);
+
             await _db.SaveChangesAsync();
-            await _email.SendAsync(session.Phone + "@example.com", "Your driver verification code (resend)", $"Your code is: {session.Code}");
+
+            await _email.SendAsync(
+                session.Phone + "@example.com",
+                "Your driver verification code (resend)",
+                $"Your code is: {session.Code}"
+            );
 
             return Ok(new { Sent = true });
         }
+
 
         [HttpPost("verify")]
         public async Task<IActionResult> Verify([FromBody] VerifyRequest req)
