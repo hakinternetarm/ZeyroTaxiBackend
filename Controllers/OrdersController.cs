@@ -157,7 +157,7 @@ namespace Taxi_API.Controllers
         }
 
         [Authorize]
-        [HttpPost("estimate")]
+        [HttpPost("estimate/body")]
         public IActionResult Estimate([FromBody] Order order)
         {
             // Require coordinates for better estimate
