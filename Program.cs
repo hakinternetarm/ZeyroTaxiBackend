@@ -122,11 +122,21 @@ app.Map("/ws", async context =>
 
 app.MapControllers();
 
-// Ensure DB exists
+// Apply EF Core migrations (recommended) so DB schema is updated when the app starts.
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    db.Database.EnsureCreated();
+    try
+    {
+        db.Database.Migrate();
+    }
+    catch (Exception ex)
+    {
+        var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+        logger.LogError(ex, "Failed to apply database migrations at startup. Ensure migrations are created and the process has write access to the database file.");
+        // rethrow to fail fast if desired, or swallow to allow app to continue
+        throw;
+    }
 }
 
 app.Run();
