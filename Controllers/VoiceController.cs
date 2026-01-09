@@ -129,5 +129,85 @@ namespace Taxi_API.Controllers
 
             return Ok(new { text = req.Text, translation });
         }
+
+        // New text chat endpoint for chat page
+        public record ChatRequest(string Text, string? Lang = null, bool Audio = false);
+
+        [HttpPost("chat")]
+        [Authorize]
+        public async Task<IActionResult> Chat([FromBody] ChatRequest req)
+        {
+            if (req == null || string.IsNullOrWhiteSpace(req.Text)) return BadRequest("Text is required");
+
+            var lang = string.IsNullOrWhiteSpace(req.Lang) ? "en" : req.Lang;
+            var text = req.Text.Trim();
+
+            // Keyword detection across supported languages
+            var lower = text.ToLowerInvariant();
+            string intent = "chat";
+
+            var taxiKeywords = new[] { "taxi", "????", "?????" };
+            var deliveryKeywords = new[] { "delivery", "?????", "????????" };
+            var scheduleKeywords = new[] { "schedule", "???", "??????????" };
+
+            if (taxiKeywords.Any(k => lower.Contains(k))) intent = "taxi";
+            else if (deliveryKeywords.Any(k => lower.Contains(k))) intent = "delivery";
+            else if (scheduleKeywords.Any(k => lower.Contains(k))) intent = "schedule";
+
+            var prompt = $"User said (in {lang}): \n\"{text}\"\n\nDetected intent: {intent}.\nRespond in the same language concisely and if intent is taxi/delivery/schedule produce a short JSON with action and details.";
+
+            var reply = await _openAi.ChatAsync(prompt, lang);
+            if (reply == null) return StatusCode(502, "Chat failed");
+
+            Order? created = null;
+
+            if (intent == "taxi" || intent == "delivery" || intent == "schedule")
+            {
+                var jsonStart = reply.IndexOf('{');
+                var jsonEnd = reply.LastIndexOf('}');
+                if (jsonStart >= 0 && jsonEnd > jsonStart)
+                {
+                    var jsonStr = reply.Substring(jsonStart, jsonEnd - jsonStart + 1);
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(jsonStr);
+                        var root = doc.RootElement;
+                        var order = new Order();
+                        order.Action = root.GetProperty("action").GetString() ?? intent;
+                        if (root.TryGetProperty("pickup", out var pu)) order.Pickup = pu.GetString();
+                        if (root.TryGetProperty("destination", out var de)) order.Destination = de.GetString();
+                        if (root.TryGetProperty("packageDetails", out var pd)) order.PackageDetails = pd.GetString();
+                        if (root.TryGetProperty("scheduledFor", out var sf) && sf.ValueKind == JsonValueKind.String)
+                        {
+                            if (DateTime.TryParse(sf.GetString(), out var dt)) order.ScheduledFor = dt;
+                        }
+
+                        // Associate with current user if available
+                        var userIdStr = User.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)?.Value;
+                        if (Guid.TryParse(userIdStr, out var userId))
+                        {
+                            order.UserId = userId;
+                            order.CreatedAt = DateTime.UtcNow;
+                            _db.Orders.Add(order);
+                            await _db.SaveChangesAsync();
+                            created = order;
+                        }
+                    }
+                    catch
+                    {
+                        // ignore parsing errors
+                    }
+                }
+            }
+
+            if (req.Audio)
+            {
+                var audioBytes = await _openAi.SynthesizeSpeechAsync(reply, lang);
+                if (audioBytes == null) return StatusCode(502, "TTS failed");
+                return File(audioBytes, "audio/wav", "reply.wav");
+            }
+
+            return Ok(new { text, intent, reply, order = created });
+        }
     }
 }
