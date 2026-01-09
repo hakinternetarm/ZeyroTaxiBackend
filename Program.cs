@@ -23,6 +23,8 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 
 builder.Services.AddScoped<IStorageService, LocalStorageService>();
 builder.Services.AddScoped<IEmailService, SmtpEmailService>();
+builder.Services.AddScoped<ISmsService, TwilioSmsService>();
+builder.Services.AddScoped<IEmailService, SmtpEmailService>();
 builder.Services.AddScoped<ITokenService, JwtTokenService>();
 builder.Services.AddSingleton<IImageComparisonService, OpenCvImageComparisonService>();
 // Register OpenAI service for voice/chat
@@ -161,6 +163,30 @@ using (var scope = app.Services.CreateScope())
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Failed to verify/create AuthSessions table fallback");
+        }
+
+        // Defensive: ensure Users table has PhoneVerified column (DB may be older)
+        try
+        {
+            var conn2 = db.Database.GetDbConnection();
+            await conn2.OpenAsync();
+            await using (conn2)
+            {
+                using var checkCmd = conn2.CreateCommand();
+                checkCmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('Users') WHERE name='PhoneVerified';";
+                var colExists = Convert.ToInt32(await checkCmd.ExecuteScalarAsync());
+                if (colExists == 0)
+                {
+                    logger.LogInformation("Users.PhoneVerified column missing — adding column.");
+                    using var alterCmd = conn2.CreateCommand();
+                    alterCmd.CommandText = "ALTER TABLE Users ADD COLUMN PhoneVerified INTEGER NOT NULL DEFAULT 0;";
+                    await alterCmd.ExecuteNonQueryAsync();
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to verify/create Users.PhoneVerified column fallback");
         }
     }
     catch (Exception ex)

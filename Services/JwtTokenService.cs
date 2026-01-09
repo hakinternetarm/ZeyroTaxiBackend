@@ -4,6 +4,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
 using Taxi_API.Models;
+using System.Security.Cryptography;
 
 namespace Taxi_API.Services
 {
@@ -27,7 +28,10 @@ namespace Taxi_API.Services
                 new Claim("isDriver", user.IsDriver.ToString())
             };
 
-            var creds = new SigningCredentials(new SymmetricSecurityKey(Encoding.UTF8.GetBytes(key)), SecurityAlgorithms.HmacSha256);
+            // Ensure key is at least 256 bits by deriving SHA-256 of the configured key
+            byte[] keyBytes = SHA256.HashData(Encoding.UTF8.GetBytes(key));
+
+            var creds = new SigningCredentials(new SymmetricSecurityKey(keyBytes), SecurityAlgorithms.HmacSha256);
             var token = new JwtSecurityToken(issuer, issuer, claims, expires: DateTime.UtcNow.AddDays(7), signingCredentials: creds);
             return new JwtSecurityTokenHandler().WriteToken(token);
         }

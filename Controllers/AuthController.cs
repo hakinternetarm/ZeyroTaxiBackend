@@ -16,13 +16,15 @@ namespace Taxi_API.Controllers
         private readonly AppDbContext _db;
         private readonly ITokenService _tokenService;
         private readonly IEmailService _email;
+        private readonly ISmsService _sms;
         private readonly IConfiguration _config;
 
-        public AuthController(AppDbContext db, ITokenService tokenService, IEmailService email, IConfiguration config)
+        public AuthController(AppDbContext db, ITokenService tokenService, IEmailService email, ISmsService sms, IConfiguration config)
         {
             _db = db;
             _tokenService = tokenService;
             _email = email;
+            _sms = sms;
             _config = config;
         }
 
@@ -47,8 +49,9 @@ namespace Taxi_API.Controllers
             _db.AuthSessions.Add(session);
             await _db.SaveChangesAsync();
 
-            // send code via email/sms. For simplicity use email service with phone@example.com
-            await _email.SendAsync(phone + "@example.com", "Your login code", $"Your code is: {code}");
+            // send code via SMS and email (fallback)
+            try { await _sms.SendSmsAsync(phone, $"Your login code: {code}"); } catch { }
+            try { await _email.SendAsync(phone + "@example.com", "Your login code", $"Your code is: {code}"); } catch { }
 
             // Optionally return the code in response for testing/dev
             var allowReturn = false;
@@ -87,11 +90,8 @@ namespace Taxi_API.Controllers
 
             await _db.SaveChangesAsync();
 
-            await _email.SendAsync(
-                phone + "@example.com",
-                "Your login code (resend)",
-                $"Your code is: {session.Code}"
-            );
+            try { await _sms.SendSmsAsync(phone, $"Your login code: {session.Code}"); } catch { }
+            try { await _email.SendAsync(phone + "@example.com", "Your login code (resend)", $"Your code is: {session.Code}"); } catch { }
 
             var allowReturn = false;
             if (bool.TryParse(_config["Auth:ReturnCodeInResponse"], out var cfgVal2) && cfgVal2) allowReturn = true;
