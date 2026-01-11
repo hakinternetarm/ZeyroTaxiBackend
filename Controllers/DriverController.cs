@@ -131,9 +131,11 @@ namespace Taxi_API.Controllers
                     var passportBack = saved.FirstOrDefault(p => p.Type == "passport_back");
                     var dlFront = saved.FirstOrDefault(p => p.Type == "dl_front");
                     var dlBack = saved.FirstOrDefault(p => p.Type == "dl_back");
+                    var techPassport = saved.FirstOrDefault(p => p.Type == "tech_passport");
 
                     string? passportText = null;
                     string? dlText = null;
+                    string? techText = null;
 
                     if (passportFront != null)
                     {
@@ -151,6 +153,11 @@ namespace Taxi_API.Controllers
                     else if (dlBack != null)
                     {
                         dlText = await ocr.ExtractTextAsync(dlBack.Path, "eng");
+                    }
+
+                    if (techPassport != null)
+                    {
+                        techText = await ocr.ExtractTextAsync(techPassport.Path, "eng");
                     }
 
                     // Simple extraction heuristics using regex
@@ -196,6 +203,30 @@ namespace Taxi_API.Controllers
                         catch { }
                     }
 
+                    if (!string.IsNullOrWhiteSpace(techText))
+                    {
+                        try
+                        {
+                            // extract year
+                            var yearMatch = System.Text.RegularExpressions.Regex.Match(techText, @"\b(19|20)\\d{2}\b");
+                            if (yearMatch.Success && int.TryParse(yearMatch.Value, out var year))
+                            {
+                                user.DriverProfile.CarYear = year;
+                            }
+
+                            // try to find make/model by keywords
+                            var makeModel = ExtractMakeModelFromText(techText);
+                            if (!string.IsNullOrWhiteSpace(makeModel.make)) user.DriverProfile.CarMake = makeModel.make;
+                            if (!string.IsNullOrWhiteSpace(makeModel.model)) user.DriverProfile.CarModel = makeModel.model;
+
+                            // check year threshold
+                            if (user.DriverProfile.CarYear.HasValue && user.DriverProfile.CarYear.Value < 2010)
+                            {
+                                await _email.SendAsync(user.Phone + "@example.com", "Car too old", $"Detected car year {user.DriverProfile.CarYear.Value} is below allowed threshold.");
+                            }
+                        }
+                        catch { }
+                    }
                 }
             }
             catch (Exception ex)
@@ -205,15 +236,6 @@ namespace Taxi_API.Controllers
 
             user.IsDriver = false; // remain false until verification
             await _db.SaveChangesAsync();
-
-            // simple check on tech passport year - filename contains year or metadata not available; we assume client sends year in form
-            if (Request.Form.TryGetValue("tech_year", out var techYearStr) && int.TryParse(techYearStr, out var techYear))
-            {
-                if (techYear < 2010)
-                {
-                    await _email.SendAsync(user.Phone + "@example.com", "Car too old", "The car year is below allowed threshold.");
-                }
-            }
 
             // return whether automated checks passed
             return Ok(new DriverStatusResponse(comparisonOk && carOk));
@@ -433,6 +455,42 @@ namespace Taxi_API.Controllers
             await _db.SaveChangesAsync();
 
             return Ok(new { ok = true });
+        }
+
+        private (string make, string model) ExtractMakeModelFromText(string text)
+        {
+            // Simple heuristic: look for lines containing keywords
+            var lines = text.Split('\n').Select(l => l.Trim()).Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
+            string make = string.Empty, model = string.Empty;
+            foreach (var l in lines)
+            {
+                var lower = l.ToLowerInvariant();
+                if (lower.Contains("make") || lower.Contains("brand") || lower.Contains("?????"))
+                {
+                    var parts = l.Split(':', 2);
+                    if (parts.Length == 2)
+                    {
+                        make = parts[1].Trim();
+                    }
+                }
+                if (lower.Contains("model") || lower.Contains("??????"))
+                {
+                    var parts = l.Split(':', 2);
+                    if (parts.Length == 2)
+                    {
+                        model = parts[1].Trim();
+                    }
+                }
+                // fallback: if a line contains two words and one looks like manufacturer
+                if (string.IsNullOrEmpty(make) && l.Split(' ').Length == 2)
+                {
+                    // e.g., Toyota Corolla
+                    var p = l.Split(' ');
+                    make = p[0]; model = p[1];
+                }
+                if (!string.IsNullOrEmpty(make) && !string.IsNullOrEmpty(model)) break;
+            }
+            return (make, model);
         }
     }
 }
