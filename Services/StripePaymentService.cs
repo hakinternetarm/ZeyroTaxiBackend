@@ -59,5 +59,21 @@ namespace Taxi_API.Services
             await Task.Delay(10);
             return "tr_" + Guid.NewGuid().ToString("N");
         }
+
+        public async Task<string?> CreateConnectedAccountAsync(string email, string country = "US")
+        {
+            _logger.LogInformation("CreateConnectedAccountAsync called (stub) email={email} country={country}", email, country);
+            // In production use Stripe.NET to create Account with type 'express' or 'custom'
+            await Task.Delay(10);
+            return "acct_" + Guid.NewGuid().ToString("N");
+        }
+
+        public async Task<string?> CreateAccountLinkAsync(string accountId, string refreshUrl, string returnUrl)
+        {
+            _logger.LogInformation("CreateAccountLinkAsync called (stub) accountId={account}", accountId);
+            // In production use Stripe.NET AccountLinkService to create onboarding link
+            await Task.Delay(10);
+            return "https://connect.stripe.com/onboarding/placeholder/" + accountId;
+        }
     }
 }

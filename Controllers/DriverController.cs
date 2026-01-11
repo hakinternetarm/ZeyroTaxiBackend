@@ -16,13 +16,15 @@ namespace Taxi_API.Controllers
         private readonly IStorageService _storage;
         private readonly IEmailService _email;
         private readonly IImageComparisonService _imageComparison;
+        private readonly IPaymentService _paymentService;
 
-        public DriverController(AppDbContext db, IStorageService storage, IEmailService email, IImageComparisonService imageComparison)
+        public DriverController(AppDbContext db, IStorageService storage, IEmailService email, IImageComparisonService imageComparison, IPaymentService paymentService)
         {
             _db = db;
             _storage = storage;
             _email = email;
             _imageComparison = imageComparison;
+            _paymentService = paymentService;
         }
 
         [Authorize]
@@ -254,6 +256,35 @@ namespace Taxi_API.Controllers
             catch { }
 
             return Ok(new { ok = true });
+        }
+
+        [Authorize]
+        [HttpPost("stripe/onboard")]
+        public async Task<IActionResult> CreateStripeOnboard()
+        {
+            var userIdStr = User.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)?.Value;
+            if (!Guid.TryParse(userIdStr, out var userId)) return Unauthorized();
+
+            var user = await _db.Users.Include(u => u.DriverProfile).FirstOrDefaultAsync(u => u.Id == userId);
+            if (user == null) return NotFound();
+
+            var email = (user.Name ?? user.Phone) + "@example.com";
+            var accountId = await _paymentService.CreateConnectedAccountAsync(email, "US");
+            if (string.IsNullOrEmpty(accountId)) return StatusCode(502, "Failed to create connected account");
+
+            if (user.DriverProfile == null)
+            {
+                user.DriverProfile = new DriverProfile { UserId = user.Id };
+                _db.DriverProfiles.Add(user.DriverProfile);
+            }
+            user.DriverProfile.StripeAccountId = accountId;
+            await _db.SaveChangesAsync();
+
+            var refresh = "https://yourapp.example.com/stripe-refresh";
+            var ret = "https://yourapp.example.com/stripe-return";
+            var link = await _paymentService.CreateAccountLinkAsync(accountId, refresh, ret);
+
+            return Ok(new { accountId, link });
         }
 
         public record DriverLocationUpdate(double Lat, double Lng);

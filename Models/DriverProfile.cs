@@ -29,6 +29,9 @@ namespace Taxi_API.Models
         public string? CarPlate { get; set; }
         public int? CarYear { get; set; }
 
+        // Stripe Connect account id for payouts
+        public string? StripeAccountId { get; set; }
+
         // Current location (for driver tracking)
         public double? CurrentLat { get; set; }
         public double? CurrentLng { get; set; }

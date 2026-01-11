@@ -16,5 +16,11 @@ namespace Taxi_API.Services
 
         // Transfer (payout) funds to a driver's connected account (instant/fast payout). Returns transfer id
         Task<string?> TransferToDriverAsync(long amountCents, string driverAccountId, string currency = "usd");
+
+        // Create a connected account for a driver and return the account id
+        Task<string?> CreateConnectedAccountAsync(string email, string country = "US");
+
+        // Create an account link (onboarding) URL for a connected account
+        Task<string?> CreateAccountLinkAsync(string accountId, string refreshUrl, string returnUrl);
     }
 }
