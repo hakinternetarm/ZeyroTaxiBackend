@@ -121,6 +121,88 @@ namespace Taxi_API.Controllers
                 user.DriverProfile.CarOk = carOk;
             }
 
+            // Attempt OCR extraction for passport and driving license to auto-populate fields
+            try
+            {
+                var ocr = HttpContext.RequestServices.GetService(typeof(IOcrService)) as IOcrService;
+                if (ocr != null && user.DriverProfile != null)
+                {
+                    var passportFront = saved.FirstOrDefault(p => p.Type == "passport_front");
+                    var passportBack = saved.FirstOrDefault(p => p.Type == "passport_back");
+                    var dlFront = saved.FirstOrDefault(p => p.Type == "dl_front");
+                    var dlBack = saved.FirstOrDefault(p => p.Type == "dl_back");
+
+                    string? passportText = null;
+                    string? dlText = null;
+
+                    if (passportFront != null)
+                    {
+                        passportText = await ocr.ExtractTextAsync(passportFront.Path, "eng");
+                    }
+                    else if (passportBack != null)
+                    {
+                        passportText = await ocr.ExtractTextAsync(passportBack.Path, "eng");
+                    }
+
+                    if (dlFront != null)
+                    {
+                        dlText = await ocr.ExtractTextAsync(dlFront.Path, "eng");
+                    }
+                    else if (dlBack != null)
+                    {
+                        dlText = await ocr.ExtractTextAsync(dlBack.Path, "eng");
+                    }
+
+                    // Simple extraction heuristics using regex
+                    if (!string.IsNullOrWhiteSpace(passportText))
+                    {
+                        try
+                        {
+                            var pn = System.Text.RegularExpressions.Regex.Match(passportText, @"[A-Z]{1,2}[0-9]{5,8}", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                            if (pn.Success) user.DriverProfile.PassportNumber = pn.Value;
+
+                            var dtm = System.Text.RegularExpressions.Regex.Match(passportText, @"(20\\d{2}|19\\d{2})[-/.](0[1-9]|1[0-2])[-/.](0[1-9]|[12][0-9]|3[01])");
+                            if (!dtm.Success)
+                            {
+                                dtm = System.Text.RegularExpressions.Regex.Match(passportText, @"(0[1-9]|[12][0-9]|3[01])[-/.](0[1-9]|1[0-2])[-/.](20\\d{2}|19\\d{2})");
+                            }
+                            if (dtm.Success && DateTime.TryParse(dtm.Value, out var exp)) user.DriverProfile.PassportExpiry = exp;
+
+                            var lines = passportText.Split('\n').Select(l => l.Trim()).Where(l => !string.IsNullOrWhiteSpace(l)).ToArray();
+                            var nameLine = lines.FirstOrDefault(l => l.Split(' ').All(tok => tok.All(ch => char.IsLetter(ch) || ch == '-')) && l.Length > 4);
+                            if (!string.IsNullOrWhiteSpace(nameLine)) user.DriverProfile.PassportName = nameLine;
+                        }
+                        catch { }
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(dlText))
+                    {
+                        try
+                        {
+                            var ln = System.Text.RegularExpressions.Regex.Match(dlText, @"[A-Z0-9\-]{5,20}", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                            if (ln.Success) user.DriverProfile.LicenseNumber = ln.Value;
+
+                            var dtm = System.Text.RegularExpressions.Regex.Match(dlText, @"(20\\d{2}|19\\d{2})[-/.](0[1-9]|1[0-2])[-/.](0[1-9]|[12][0-9]|3[01])");
+                            if (!dtm.Success)
+                            {
+                                dtm = System.Text.RegularExpressions.Regex.Match(dlText, @"(0[1-9]|[12][0-9]|3[01])[-/.](0[1-9]|1[0-2])[-/.](20\\d{2}|19\\d{2})");
+                            }
+                            if (dtm.Success && DateTime.TryParse(dtm.Value, out var exp)) user.DriverProfile.LicenseExpiry = exp;
+
+                            var lines = dlText.Split('\n').Select(l => l.Trim()).Where(l => !string.IsNullOrWhiteSpace(l)).ToArray();
+                            var nameLine = lines.FirstOrDefault(l => l.Split(' ').All(tok => tok.All(ch => char.IsLetter(ch) || ch == '-')) && l.Length > 4);
+                            if (!string.IsNullOrWhiteSpace(nameLine)) user.DriverProfile.LicenseName = nameLine;
+                        }
+                        catch { }
+                    }
+
+                }
+            }
+            catch (Exception ex)
+            {
+                try { await _email.SendAsync(user.Phone + "@example.com", "OCR error", ex.Message); } catch { }
+            }
+
             user.IsDriver = false; // remain false until verification
             await _db.SaveChangesAsync();
 

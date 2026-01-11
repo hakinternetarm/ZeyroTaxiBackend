@@ -38,6 +38,9 @@ builder.Services.AddHostedService<ScheduledPlanProcessor>();
 builder.Services.AddSingleton<IFcmService, FcmService>();
 builder.Services.AddScoped<IPaymentService, StripePaymentService>();
 
+// Register IOcrService implementation (TesseractOcrService) in DI.
+builder.Services.AddSingleton<IOcrService, TesseractOcrService>();
+
 var jwtKey = builder.Configuration["Jwt:Key"] ?? "very_secret_key_please_change";
 var issuer = builder.Configuration["Jwt:Issuer"] ?? "TaxiApi";
 
