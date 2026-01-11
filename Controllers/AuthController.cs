@@ -33,7 +33,9 @@ namespace Taxi_API.Controllers
         {
             if (string.IsNullOrWhiteSpace(req.Phone)) return BadRequest("Phone is required");
 
-            var phone = req.Phone.Trim();
+            var norm = PhoneNumberValidator.Normalize(req.Phone);
+            if (norm == null) return BadRequest("Invalid phone format");
+            var phone = norm;
 
             var code = new Random().Next(100000, 999999).ToString("D6");
             var session = new AuthSession
@@ -49,9 +51,8 @@ namespace Taxi_API.Controllers
             _db.AuthSessions.Add(session);
             await _db.SaveChangesAsync();
 
-            // send code via SMS and email (fallback)
-            try { await _sms.SendSmsAsync(phone, $"Your login code: {code}"); } catch { }
-            try { await _email.SendAsync(phone + "@example.com", "Your login code", $"Your code is: {code}"); } catch { }
+            // send code via email/sms. For simplicity use email service with phone@example.com
+            await _email.SendAsync(phone + "@example.com", "Your login code", $"Your code is: {code}");
 
             // Optionally return the code in response for testing/dev
             var allowReturn = false;
@@ -75,7 +76,9 @@ namespace Taxi_API.Controllers
             if (string.IsNullOrWhiteSpace(req.Phone))
                 return BadRequest("Phone is required");
 
-            var phone = req.Phone.Trim();
+            var phoneNorm = PhoneNumberValidator.Normalize(req.Phone);
+            if (phoneNorm == null) return BadRequest("Invalid phone format");
+            var phone = phoneNorm;
 
             var session = await _db.AuthSessions
                 .Where(s => s.Phone == phone && !s.Verified)
@@ -90,19 +93,11 @@ namespace Taxi_API.Controllers
 
             await _db.SaveChangesAsync();
 
-            try { await _sms.SendSmsAsync(phone, $"Your login code: {session.Code}"); } catch { }
-            try { await _email.SendAsync(phone + "@example.com", "Your login code (resend)", $"Your code is: {session.Code}"); } catch { }
-
-            var allowReturn = false;
-            if (bool.TryParse(_config["Auth:ReturnCodeInResponse"], out var cfgVal2) && cfgVal2) allowReturn = true;
-#if DEBUG
-            allowReturn = true;
-#endif
-
-            if (allowReturn)
-            {
-                return Ok(new { Sent = true, Code = session.Code, AuthSessionId = session.Id.ToString() });
-            }
+            await _email.SendAsync(
+                phone + "@example.com",
+                "Your login code (resend)",
+                $"Your code is: {session.Code}"
+            );
 
             return Ok(new { Sent = true });
         }
@@ -112,23 +107,12 @@ namespace Taxi_API.Controllers
         {
             if (string.IsNullOrWhiteSpace(req.Phone) || string.IsNullOrWhiteSpace(req.Code)) return BadRequest("Phone and Code are required");
 
-            var phone = req.Phone.Trim();
-            var code = req.Code.Trim();
+            var phoneNorm = PhoneNumberValidator.Normalize(req.Phone);
+            if (phoneNorm == null) return BadRequest("Invalid phone format");
+            var phone = phoneNorm;
 
-            // find latest session for this phone
-            var session = await _db.AuthSessions
-                .Where(s => s.Phone == phone)
-                .OrderByDescending(s => s.CreatedAt)
-                .FirstOrDefaultAsync();
-
-            if (session == null)
-                return BadRequest("No session found for this phone");
-
-            if (session.ExpiresAt <= DateTime.UtcNow)
-                return BadRequest("Code expired");
-
-            if (session.Code != code)
-                return BadRequest("Invalid code");
+            var session = await _db.AuthSessions.OrderByDescending(s => s.CreatedAt).FirstOrDefaultAsync(s => s.Phone == phone && s.Code == req.Code && s.ExpiresAt > DateTime.UtcNow);
+            if (session == null) return BadRequest("Invalid or expired code");
 
             session.Verified = true;
             await _db.SaveChangesAsync();

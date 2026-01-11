@@ -38,7 +38,10 @@ namespace Taxi_API.Controllers
         {
             if (string.IsNullOrWhiteSpace(req.Phone)) return BadRequest("Phone is required");
 
-            var phone = req.Phone.Trim();
+            var norm = PhoneNumberValidator.Normalize(req.Phone);
+            if (norm == null) return BadRequest("Invalid phone format");
+            var phone = norm;
+
             var code = new Random().Next(100000, 999999).ToString("D6");
 
             var session = new AuthSession
@@ -76,7 +79,9 @@ namespace Taxi_API.Controllers
         {
             if (string.IsNullOrWhiteSpace(req.Phone)) return BadRequest("Phone is required");
 
-            var phone = req.Phone.Trim();
+            var phoneNorm = PhoneNumberValidator.Normalize(req.Phone);
+            if (phoneNorm == null) return BadRequest("Invalid phone format");
+            var phone = phoneNorm;
 
             var session = await _db.AuthSessions
                 .Where(s => s.Phone == phone && !s.Verified && s.ExpiresAt > DateTime.UtcNow)
@@ -111,17 +116,26 @@ namespace Taxi_API.Controllers
         {
             if (string.IsNullOrWhiteSpace(req.Phone) || string.IsNullOrWhiteSpace(req.Code)) return BadRequest("Phone and Code are required");
 
-            var session = await _db.AuthSessions.OrderByDescending(s => s.CreatedAt).FirstOrDefaultAsync(s => s.Phone == req.Phone && s.Code == req.Code && s.ExpiresAt > DateTime.UtcNow);
-            if (session == null) return BadRequest("Invalid or expired code");
+            var phoneNorm = PhoneNumberValidator.Normalize(req.Phone);
+            if (phoneNorm == null) return BadRequest("Invalid phone format");
+            var phone = phoneNorm;
+
+            var session = await _db.AuthSessions
+                .Where(s => s.Phone == phone)
+                .OrderByDescending(s => s.CreatedAt)
+                .FirstOrDefaultAsync();
+
+            if (session == null) return BadRequest("No session found for this phone");
+            if (session.ExpiresAt <= DateTime.UtcNow) return BadRequest("Code expired");
+            if (session.Code != req.Code) return BadRequest("Invalid code");
 
             session.Verified = true;
             await _db.SaveChangesAsync();
 
-            // create or fetch user and mark as driver
-            var user = await _db.Users.FirstOrDefaultAsync(u => u.Phone == req.Phone);
+            var user = await _db.Users.FirstOrDefaultAsync(u => u.Phone == phone);
             if (user == null)
             {
-                user = new User { Id = Guid.NewGuid(), Phone = req.Phone, Name = req.Name, IsDriver = true, PhoneVerified = true };
+                user = new User { Id = Guid.NewGuid(), Phone = phone, Name = req.Name, IsDriver = true, PhoneVerified = true };
                 _db.Users.Add(user);
                 await _db.SaveChangesAsync();
             }
@@ -133,7 +147,7 @@ namespace Taxi_API.Controllers
                 await _db.SaveChangesAsync();
             }
 
-            return Ok(new { authSessionId = session.Id.ToString() });
+            return Ok(new { AuthSessionId = session.Id.ToString() });
         }
 
         // Accept token in body: { "token": "..." } — Swagger will show request body
