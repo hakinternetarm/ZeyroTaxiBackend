@@ -63,6 +63,9 @@ builder.Services
         };
     });
 
+builder.Services.AddHttpClient();
+builder.Services.AddSingleton<IIpayService, IpayService>();
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
