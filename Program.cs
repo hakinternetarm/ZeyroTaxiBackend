@@ -215,3 +215,10 @@ static async Task EnsureDatabaseMigratedAsync(IServiceProvider services, ILogger
         throw;
     }
 }
+
+// Expected configuration keys for Idram integration:
+// "Idram:RecAccount" - merchant idram account
+// "Idram:SuccessUrl" - URL to redirect on success
+// "Idram:FailUrl" - URL to redirect on fail
+// "Idram:ResultUrl" - endpoint that Idram will POST results to (should point to /api/idram/result)
+// "Idram:SecretKey" - merchant secret key

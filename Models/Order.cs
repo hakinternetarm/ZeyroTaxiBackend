@@ -52,6 +52,13 @@ namespace Taxi_API.Models
         // Payment
         public string? PaymentMethod { get; set; }
 
+        // Idram / Billing fields
+        public string? BillNo { get; set; }
+        public string? PaymentProvider { get; set; }
+        public string? TransactionId { get; set; }
+        public DateTime? PaidAt { get; set; }
+        public decimal? PaidAmount { get; set; }
+
         // Additional options
         public bool PetAllowed { get; set; }
         public bool ChildSeat { get; set; }
