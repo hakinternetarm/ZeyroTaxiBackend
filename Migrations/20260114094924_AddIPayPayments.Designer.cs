@@ -2,17 +2,20 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Taxi_API.Data;
 
 #nullable disable
 
-namespace Taxi_API.Migrations
+namespace TaxiApi.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class TaxiApiModelSnapshot : ModelSnapshot
+    [Migration("20260114094924_AddIPayPayments")]
+    partial class AddIPayPayments
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "8.0.0");

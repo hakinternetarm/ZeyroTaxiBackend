@@ -1,9 +1,10 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using System.Security.Cryptography;
-using System.Text;
 using Taxi_API.Data;
+using Taxi_API.DTOs;
 using Taxi_API.Models;
+using Taxi_API.Services;
 
 namespace Taxi_API.Controllers
 {
@@ -12,120 +13,264 @@ namespace Taxi_API.Controllers
     public class IdramController : ControllerBase
     {
         private readonly AppDbContext _db;
-        private readonly IConfiguration _config;
+        private readonly IdramPaymentService _idramService;
         private readonly ILogger<IdramController> _logger;
 
-        public IdramController(AppDbContext db, IConfiguration config, ILogger<IdramController> logger)
+        public IdramController(AppDbContext db, IdramPaymentService idramService, ILogger<IdramController> logger)
         {
             _db = db;
-            _config = config;
+            _idramService = idramService;
             _logger = logger;
         }
 
-        // Generate HTML form data for redirect to Idram payment page
-        [HttpPost("pay/{orderId}")]
-        public async Task<IActionResult> Pay(Guid orderId)
+        /// <summary>
+        /// Generate Idram payment form data for client to submit
+        /// </summary>
+        [Authorize]
+        [HttpPost("create-payment")]
+        public async Task<IActionResult> CreatePayment([FromBody] IdramPaymentRequest request)
         {
-            var order = await _db.Orders.FirstOrDefaultAsync(o => o.Id == orderId);
-            if (order == null) return NotFound();
-
-            // Read merchant config
-            var edpRec = _config["Idram:RecAccount"];
-            var successUrl = _config["Idram:SuccessUrl"];
-            var failUrl = _config["Idram:FailUrl"];
-            var resultUrl = _config["Idram:ResultUrl"];
-
-            if (string.IsNullOrWhiteSpace(edpRec) || string.IsNullOrWhiteSpace(resultUrl))
-                return StatusCode(500, "Idram not configured");
-
-            // Prepare form values
-            var amount = (order.Price ?? 0m).ToString(System.Globalization.CultureInfo.InvariantCulture);
-            var billNo = order.BillNo ?? order.Id.ToString();
-
-            var sb = new StringBuilder();
-            sb.AppendLine("<!doctype html><html><body onload=\"document.forms[0].submit()\">" );
-            sb.AppendLine($"<form action=\"https://banking.idram.am/Payment/GetPayment\" method=\"POST\">\n");
-            sb.AppendLine($"<input type=\"hidden\" name=\"EDP_LANGUAGE\" value=\"EN\">\n");
-            sb.AppendLine($"<input type=\"hidden\" name=\"EDP_REC_ACCOUNT\" value=\"{edpRec}\">\n");
-            sb.AppendLine($"<input type=\"hidden\" name=\"EDP_DESCRIPTION\" value=\"Order {order.Id}\">\n");
-            sb.AppendLine($"<input type=\"hidden\" name=\"EDP_AMOUNT\" value=\"{amount}\">\n");
-            sb.AppendLine($"<input type=\"hidden\" name=\"EDP_BILL_NO\" value=\"{billNo}\">\n");
-            if (!string.IsNullOrWhiteSpace(successUrl)) sb.AppendLine($"<input type=\"hidden\" name=\"EDP_SUCCESS_URL\" value=\"{successUrl}\">\n");
-            if (!string.IsNullOrWhiteSpace(failUrl)) sb.AppendLine($"<input type=\"hidden\" name=\"EDP_FAIL_URL\" value=\"{failUrl}\">\n");
-            sb.AppendLine("<input type=\"submit\" value=\"Pay\">\n</form></body></html>");
-
-            return Content(sb.ToString(), "text/html");
-        }
-
-        // Endpoint for Idram result notifications (both precheck and final).
-        [HttpPost("result")] // configured as RESULT_URL
-        public async Task<IActionResult> Result()
-        {
-            // read form values
-            var form = await Request.ReadFormAsync();
-            var isPrecheck = form["EDP_PRECHECK"].FirstOrDefault() == "YES";
-            var billNo = form["EDP_BILL_NO"].FirstOrDefault();
-            var rec = form["EDP_REC_ACCOUNT"].FirstOrDefault();
-            var amount = form["EDP_AMOUNT"].FirstOrDefault();
-
-            if (isPrecheck)
+            if (request == null || request.Amount <= 0)
             {
-                // validate that bill exists and amount matches
-                var order = await _db.Orders.FirstOrDefaultAsync(o => (o.BillNo ?? o.Id.ToString()) == billNo);
-                if (order == null)
-                {
-                    _logger.LogWarning("Idram precheck: order not found {bill}", billNo);
-                    return Content("ERROR");
-                }
-
-                var expected = (order.Price ?? 0m).ToString(System.Globalization.CultureInfo.InvariantCulture);
-                if (expected != amount)
-                {
-                    _logger.LogWarning("Idram precheck: amount mismatch {bill} expected {exp} got {amt}", billNo, expected, amount);
-                    return Content("ERROR");
-                }
-
-                return Content("OK"); // response must be plain OK
+                return BadRequest("Invalid payment request");
             }
 
-            // final payment confirmation
-            var payer = form["EDP_PAYER_ACCOUNT"].FirstOrDefault();
-            var transId = form["EDP_TRANS_ID"].FirstOrDefault();
-            var transDate = form["EDP_TRANS_DATE"].FirstOrDefault();
-            var checksum = form["EDP_CHECKSUM"].FirstOrDefault();
-
-            // validate checksum
-            var secret = _config["Idram:SecretKey"] ?? string.Empty;
-            var payload = string.Join(":", new[] { rec ?? string.Empty, amount ?? string.Empty, secret, billNo ?? string.Empty, payer ?? string.Empty, transId ?? string.Empty, transDate ?? string.Empty });
-            using var md5 = MD5.Create();
-            var hash = md5.ComputeHash(Encoding.UTF8.GetBytes(payload));
-            var calc = BitConverter.ToString(hash).Replace("-", string.Empty).ToLowerInvariant();
-
-            if (calc != (checksum ?? string.Empty).ToLowerInvariant())
+            var userIdStr = User.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)?.Value;
+            if (!Guid.TryParse(userIdStr, out var userId))
             {
-                _logger.LogWarning("Idram checksum mismatch for bill {bill}", billNo);
-                return Content("ERROR");
+                return Unauthorized();
             }
 
-            var order2 = await _db.Orders.FirstOrDefaultAsync(o => (o.BillNo ?? o.Id.ToString()) == billNo);
-            if (order2 == null)
-            {
-                _logger.LogWarning("Idram confirm: order not found {bill}", billNo);
-                return Content("ERROR");
-            }
+            // Generate a unique bill number if not provided
+            var billNo = string.IsNullOrWhiteSpace(request.BillNo) 
+                ? $"BILL_{DateTime.UtcNow.Ticks}_{userId.ToString("N")[..8]}" 
+                : request.BillNo;
 
-            // record payment
-            order2.PaymentProvider = "idram";
-            order2.TransactionId = transId;
-            order2.PaidAt = DateTime.UtcNow;
-            if (decimal.TryParse(amount, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var paid))
+            // Store payment intent in database
+            var payment = new IdramPayment
             {
-                order2.PaidAmount = paid;
-            }
+                UserId = userId,
+                BillNo = billNo,
+                Description = request.Description,
+                Amount = request.Amount,
+                Status = "Pending"
+            };
 
+            _db.IdramPayments.Add(payment);
             await _db.SaveChangesAsync();
 
-            return Content("OK");
+            var formData = new IdramPaymentFormData
+            {
+                PaymentUrl = _idramService.GetPaymentUrl(),
+                FormFields = new Dictionary<string, string>
+                {
+                    { "EDP_LANGUAGE", request.Language },
+                    { "EDP_REC_ACCOUNT", _idramService.GetReceiverAccount() },
+                    { "EDP_DESCRIPTION", request.Description },
+                    { "EDP_AMOUNT", request.Amount.ToString("F2") },
+                    { "EDP_BILL_NO", billNo }
+                }
+            };
+
+            // Add email if provided
+            if (!string.IsNullOrWhiteSpace(request.Email))
+            {
+                formData.FormFields["EDP_EMAIL"] = request.Email;
+            }
+            else if (!string.IsNullOrWhiteSpace(_idramService.GetEmail()))
+            {
+                formData.FormFields["EDP_EMAIL"] = _idramService.GetEmail();
+            }
+
+            _logger.LogInformation("Created Idram payment for user {userId}, bill {billNo}, amount {amount}",
+                userId, billNo, request.Amount);
+
+            return Ok(formData);
+        }
+
+        /// <summary>
+        /// Idram preliminary check endpoint (order authenticity confirmation)
+        /// </summary>
+        [HttpPost("result")]
+        [Consumes("application/x-www-form-urlencoded")]
+        public async Task<IActionResult> HandleResult([FromForm] IdramPrecheckRequest precheck, 
+            [FromForm] IdramPaymentConfirmation confirmation)
+        {
+            // Check if this is a preliminary check
+            if (!string.IsNullOrWhiteSpace(precheck.EDP_PRECHECK) && 
+                precheck.EDP_PRECHECK.Equals("YES", StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogInformation("Idram precheck: billNo={billNo}, amount={amount}, recAccount={recAccount}",
+                    precheck.EDP_BILL_NO, precheck.EDP_AMOUNT, precheck.EDP_REC_ACCOUNT);
+
+                // Validate order authenticity
+                var isValid = _idramService.ValidateOrderPrecheck(
+                    precheck.EDP_BILL_NO,
+                    precheck.EDP_REC_ACCOUNT,
+                    precheck.EDP_AMOUNT);
+
+                if (!isValid)
+                {
+                    _logger.LogWarning("Idram precheck failed for bill {billNo}", precheck.EDP_BILL_NO);
+                    return Content("FAIL");
+                }
+
+                // Check if payment exists in database
+                var payment = await _db.IdramPayments
+                    .FirstOrDefaultAsync(p => p.BillNo == precheck.EDP_BILL_NO);
+
+                if (payment == null)
+                {
+                    _logger.LogWarning("Payment not found for bill {billNo}", precheck.EDP_BILL_NO);
+                    return Content("FAIL");
+                }
+
+                // Validate amount matches
+                if (decimal.Parse(precheck.EDP_AMOUNT) != payment.Amount)
+                {
+                    _logger.LogWarning("Amount mismatch for bill {billNo}. Expected: {expected}, Got: {actual}",
+                        precheck.EDP_BILL_NO, payment.Amount, precheck.EDP_AMOUNT);
+                    return Content("FAIL");
+                }
+
+                _logger.LogInformation("Idram precheck successful for bill {billNo}", precheck.EDP_BILL_NO);
+                return Content("OK");
+            }
+
+            // Payment confirmation
+            if (!string.IsNullOrWhiteSpace(confirmation.EDP_TRANS_ID))
+            {
+                _logger.LogInformation("Idram payment confirmation: transId={transId}, billNo={billNo}, amount={amount}",
+                    confirmation.EDP_TRANS_ID, confirmation.EDP_BILL_NO, confirmation.EDP_AMOUNT);
+
+                // Validate checksum
+                var isValid = _idramService.ValidateChecksum(
+                    confirmation.EDP_REC_ACCOUNT,
+                    confirmation.EDP_AMOUNT,
+                    confirmation.EDP_BILL_NO,
+                    confirmation.EDP_PAYER_ACCOUNT,
+                    confirmation.EDP_TRANS_ID,
+                    confirmation.EDP_TRANS_DATE,
+                    confirmation.EDP_CHECKSUM);
+
+                if (!isValid)
+                {
+                    _logger.LogError("Idram checksum validation failed for transaction {transId}", confirmation.EDP_TRANS_ID);
+                    return Content("FAIL");
+                }
+
+                // Process the successful payment
+                try
+                {
+                    var payment = await _db.IdramPayments
+                        .FirstOrDefaultAsync(p => p.BillNo == confirmation.EDP_BILL_NO);
+
+                    if (payment == null)
+                    {
+                        _logger.LogError("Payment not found for bill {billNo}", confirmation.EDP_BILL_NO);
+                        return Content("FAIL");
+                    }
+
+                    // Update payment record
+                    payment.Status = "Success";
+                    payment.PayerAccount = confirmation.EDP_PAYER_ACCOUNT;
+                    payment.TransactionId = confirmation.EDP_TRANS_ID;
+                    payment.TransactionDate = confirmation.EDP_TRANS_DATE;
+                    payment.CompletedAt = DateTime.UtcNow;
+
+                    await _db.SaveChangesAsync();
+
+                    _logger.LogInformation("Idram payment processed successfully: {transId}", confirmation.EDP_TRANS_ID);
+                    return Content("OK");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error processing Idram payment confirmation");
+                    return Content("FAIL");
+                }
+            }
+
+            _logger.LogWarning("Invalid Idram callback received");
+            return BadRequest("Invalid request");
+        }
+
+        /// <summary>
+        /// Success page redirect endpoint
+        /// </summary>
+        [HttpGet("success")]
+        [HttpPost("success")]
+        public IActionResult Success([FromQuery] string? billNo)
+        {
+            _logger.LogInformation("Idram payment success redirect: billNo={billNo}", billNo);
+            
+            // Return HTML page or redirect to your frontend
+            return Content(@"
+                <html>
+                <head><title>Payment Successful</title></head>
+                <body>
+                    <h1>Payment Successful</h1>
+                    <p>Your payment has been processed successfully.</p>
+                    <p>Bill Number: " + billNo + @"</p>
+                </body>
+                </html>
+            ", "text/html");
+        }
+
+        /// <summary>
+        /// Failure page redirect endpoint
+        /// </summary>
+        [HttpGet("fail")]
+        [HttpPost("fail")]
+        public IActionResult Fail([FromQuery] string? billNo)
+        {
+            _logger.LogInformation("Idram payment failed redirect: billNo={billNo}", billNo);
+            
+            // Return HTML page or redirect to your frontend
+            return Content(@"
+                <html>
+                <head><title>Payment Failed</title></head>
+                <body>
+                    <h1>Payment Failed</h1>
+                    <p>Your payment could not be processed.</p>
+                    <p>Bill Number: " + billNo + @"</p>
+                </body>
+                </html>
+            ", "text/html");
+        }
+
+        /// <summary>
+        /// Get payment status by bill number
+        /// </summary>
+        [Authorize]
+        [HttpGet("status/{billNo}")]
+        public async Task<IActionResult> GetPaymentStatus(string billNo)
+        {
+            if (string.IsNullOrWhiteSpace(billNo))
+            {
+                return BadRequest("Bill number is required");
+            }
+
+            var payment = await _db.IdramPayments
+                .FirstOrDefaultAsync(p => p.BillNo == billNo);
+
+            if (payment == null)
+            {
+                return NotFound(new { message = "Payment not found" });
+            }
+
+            _logger.LogInformation("Payment status requested for bill {billNo}", billNo);
+            
+            return Ok(new 
+            { 
+                billNo = payment.BillNo, 
+                status = payment.Status, 
+                amount = payment.Amount,
+                description = payment.Description,
+                transactionId = payment.TransactionId,
+                transactionDate = payment.TransactionDate,
+                createdAt = payment.CreatedAt,
+                completedAt = payment.CompletedAt
+            });
         }
     }
 }

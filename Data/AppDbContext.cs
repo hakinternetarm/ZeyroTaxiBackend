@@ -15,6 +15,8 @@ namespace Taxi_API.Data
         public DbSet<PaymentCard> PaymentCards => Set<PaymentCard>();
         public DbSet<ScheduledPlan> ScheduledPlans => Set<ScheduledPlan>();
         public DbSet<ScheduledPlanExecution> ScheduledPlanExecutions => Set<ScheduledPlanExecution>();
+        public DbSet<IdramPayment> IdramPayments => Set<IdramPayment>();
+        public DbSet<IPayPayment> IPayPayments => Set<IPayPayment>();
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -71,6 +73,35 @@ namespace Taxi_API.Data
                 .WithMany()
                 .HasForeignKey(e => e.PlanId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<IdramPayment>()
+                .HasKey(ip => ip.Id);
+
+            modelBuilder.Entity<IdramPayment>()
+                .HasIndex(ip => ip.BillNo)
+                .IsUnique();
+
+            modelBuilder.Entity<IdramPayment>()
+                .HasOne(ip => ip.User)
+                .WithMany()
+                .HasForeignKey(ip => ip.UserId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<IPayPayment>()
+                .HasKey(ipp => ipp.Id);
+
+            modelBuilder.Entity<IPayPayment>()
+                .HasIndex(ipp => ipp.OrderNumber)
+                .IsUnique();
+
+            modelBuilder.Entity<IPayPayment>()
+                .HasIndex(ipp => ipp.IPayOrderId);
+
+            modelBuilder.Entity<IPayPayment>()
+                .HasOne(ipp => ipp.User)
+                .WithMany()
+                .HasForeignKey(ipp => ipp.UserId)
+                .OnDelete(DeleteBehavior.Restrict);
 
             base.OnModelCreating(modelBuilder);
         }

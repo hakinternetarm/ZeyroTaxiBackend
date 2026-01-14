@@ -38,6 +38,13 @@ builder.Services.AddHostedService<ScheduledPlanProcessor>();
 builder.Services.AddSingleton<IFcmService, FcmService>();
 builder.Services.AddScoped<IPaymentService, StripePaymentService>();
 
+// Register Idram payment service
+builder.Services.AddScoped<IdramPaymentService>();
+
+// Register IPay payment service
+builder.Services.AddHttpClient();
+builder.Services.AddScoped<IPayPaymentService>();
+
 // Register IOcrService implementation (TesseractOcrService) in DI.
 builder.Services.AddSingleton<IOcrService, TesseractOcrService>();
 
@@ -62,9 +69,6 @@ builder.Services
             ValidateLifetime = true
         };
     });
-
-builder.Services.AddHttpClient();
-builder.Services.AddSingleton<IIpayService, IpayService>();
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
@@ -218,10 +222,3 @@ static async Task EnsureDatabaseMigratedAsync(IServiceProvider services, ILogger
         throw;
     }
 }
-
-// Expected configuration keys for Idram integration:
-// "Idram:RecAccount" - merchant idram account
-// "Idram:SuccessUrl" - URL to redirect on success
-// "Idram:FailUrl" - URL to redirect on fail
-// "Idram:ResultUrl" - endpoint that Idram will POST results to (should point to /api/idram/result)
-// "Idram:SecretKey" - merchant secret key
